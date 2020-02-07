@@ -1,0 +1,40 @@
+import {Injectable} from '@angular/core';
+import {LoadingController} from '@ionic/angular';
+
+@Injectable({
+    providedIn: 'root'
+})
+export class LoadingService {
+    isLoading = false;
+    active = 0;
+
+    constructor(private loadingController: LoadingController) {
+    }
+
+    public async present() {
+        if (!this.isLoading) {
+            this.isLoading = true;
+            console.log('present:', this.isLoading);
+            return await this.loadingController.create({
+                spinner: 'dots',
+                duration: 30000,
+            }).then(a => {
+                a.present().then(() => {
+                    console.log('presented', this.isLoading);
+                    if (!this.isLoading) {
+                        a.dismiss().then(() => {
+                            console.log('abort presenting');
+                        });
+                    }
+                });
+            });
+        }
+    }
+
+    public async dismiss() {
+        this.isLoading = false;
+        return await this.loadingController.dismiss().then(() => {
+            console.log('dismissed');
+        });
+    }
+}
