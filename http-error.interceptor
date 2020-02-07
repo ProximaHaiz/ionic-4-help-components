@@ -1,0 +1,95 @@
+import {Injectable, Injector} from '@angular/core';
+import {BehaviorSubject, Observable, throwError} from 'rxjs';
+import {catchError, filter, retry, switchMap, take} from 'rxjs/operators';
+import {ToastService} from "../shared/services/toast.service";
+import {StorageService} from "../shared/services/storage.service";
+import {StorageEnum} from "../shared/models/storage.enum";
+import {AuthService} from "../services/auth.service";
+import {Router} from '@angular/router';
+import {HttpErrorResponse, HttpEvent, HttpHandler, HttpInterceptor, HttpRequest} from '@angular/common/http';
+
+@Injectable({
+    providedIn: 'root'
+})
+export class HttpErrorInterceptor implements HttpInterceptor {
+    private isRefreshing = false;
+    private refreshTokenSubject: BehaviorSubject<any> = new BehaviorSubject<any>(null);
+
+    constructor(
+        private injector: Injector,
+        private router: Router,
+        private toastService: ToastService,
+        private storageService: StorageService,
+        private authService: AuthService
+    ) {
+    }
+
+    private applyCredentials(request, token) {
+        return request.clone({
+            headers: request.headers.set('Authorization', 'Bearer ' + token)
+        });
+    }
+
+    intercept(request: any, next: HttpHandler): Observable<HttpEvent<any>> {
+        return next.handle(request)
+            .pipe(
+                retry(1),
+                catchError((err:HttpErrorResponse) => {
+                    let errorMessage = '';
+                    console.log('err on:', err.status, err);
+                    if (err.status === 401) {
+                        return this.handle401Error(request, next);
+                    }
+
+                    if (err instanceof ErrorEvent) {
+                        // client-side error
+                        errorMessage = `Error: ${err.message}`;
+                    }
+
+                    if (err.error && err.error.error) {
+                        // server-side error
+                        errorMessage = err.error.error.details || err.error.error.message.replace(/[\[\]']+/g, '');
+                    } else {
+                        errorMessage = err.message;
+                    }
+
+                    if (err.statusText === 'Unknown Error') {
+                        errorMessage = window.navigator.onLine ? err.statusText : 'Network is not available';
+                    }
+
+                    if (err.status === 500 || err.status === 400) {
+                        this.toastService.presentToast(errorMessage, 'danger');
+                    }
+
+                    return throwError(errorMessage);
+                })
+            );
+    }
+
+    private handle401Error(request: HttpRequest<any>, next: HttpHandler) {
+        if (!this.isRefreshing) {
+            this.isRefreshing = true;
+            this.refreshTokenSubject.next(null);
+            return this.authService.refreshToken().pipe(
+                switchMap((token: any) => {
+                    this.isRefreshing = false;
+                    this.refreshTokenSubject.next(token);
+                    this.storageService.set(StorageEnum.AuthToken, token);
+                    return next.handle(this.applyCredentials(request, token));
+                })).subscribe(() => {
+                },
+                err => {
+                    this.storageService.clear();
+                    this.router.navigate(['auth/sign-in'])
+                });
+
+        } else {
+            return this.refreshTokenSubject.pipe(
+                filter(token => token != null),
+                take(1),
+                switchMap(jwt => {
+                    return next.handle(this.applyCredentials(request, jwt));
+                }));
+        }
+    }
+}
